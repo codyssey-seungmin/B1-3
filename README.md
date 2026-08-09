@@ -44,6 +44,10 @@ Zapier에서는 Google Sheets의 **New Spreadsheet Row**를 Trigger로 사용하
 
 실행 결과 긴급 문의와 일반 문의가 각각 조건에 맞는 경로로 전달되었고, 해당 Google Sheets 탭에 정상 저장되었으며 Gmail 접수 확인 메일도 정상 발송되었다. Zapier의 History에서도 실행이 **Successful** 상태로 완료된 것을 확인하였다.
 
+![Zapier 전체 워크플로우](images/project1/P1-01-zapier-workflow.png)
+
+![Zapier 실행 History](images/project1/P1-02-zapier-history.png)
+
 ## 3. n8n 구현
 
 n8n에서는 **Google Sheets Trigger — rowAdded**를 시작점으로 사용하였다. 새 행이 추가되면 **If 노드**가 `문의 유형`을 판별하고, true / false 출력에 따라 긴급 문의와 일반 문의 경로로 나누었다.
@@ -68,6 +72,8 @@ Zapier가 긴급/일반 Path마다 조건을 별도로 지정하는 방식이라
 
 긴급 문의와 일반 문의를 각각 실제 입력하여 두 분기가 모두 실행되는 것을 확인했고, 각 문의가 해당 Google Sheets 탭에 저장된 뒤 유형에 맞는 Gmail 접수 확인 메일이 발송되는 것을 검증하였다.
 
+![n8n 전체 워크플로우 및 분기 결과](images/project1/P1-03-n8n-workflow.png)
+
 ## 4. 분기별 실행 결과
 
 | 테스트 문의 | 문의 유형 | 분기 결과 | Google Sheets | Gmail |
@@ -76,6 +82,14 @@ Zapier가 긴급/일반 Path마다 조건을 별도로 지정하는 방식이라
 | 일반 문의 | 일반 | 일반 경로 실행 | 일반 문의 탭 저장 | 일반 문의 접수 메일 발송 |
 
 두 자동화 도구 모두 같은 입력 구조와 같은 최종 결과를 만들도록 구성했으며, 긴급과 일반 두 경로를 각각 1회 이상 실제 실행하여 조건 분기가 정상 동작함을 확인하였다.
+
+### 4.1 긴급 문의 Gmail 결과
+
+![긴급 문의 접수 확인 메일](images/project1/P1-04-urgent-email.png)
+
+### 4.2 일반 문의 Gmail 결과
+
+![일반 문의 접수 확인 메일](images/project1/P1-05-normal-email.png)
 
 ## 5. Zapier와 n8n 비교 분석
 
@@ -198,14 +212,6 @@ images/
     └── P2-05-email-result.png
 ```
 
-### 7.3 이미지 삽입 예시
-
-스크린샷을 업로드한 뒤 필요한 위치에 다음 형식으로 삽입한다.
-
-```markdown
-![Zapier 전체 워크플로우](images/project1/P1-01-zapier-workflow.png)
-```
-
 ## 8. 과제 요구사항 대응
 
 - [x] 서로 다른 2개 자동화 도구 사용 — Zapier, n8n
@@ -237,8 +243,8 @@ images/
 
 > [!IMPORTANT]
 > **결론:** Zapier와 n8n 모두 이번 문의 분류 자동화를 정상 구현할 수 있었다. 두 도구의 사용 난이도는 전반적으로 비슷하게 느껴졌으며, 프로젝트 2에서는 n8n을 활용해 Webhook 기반 자동화로 범위를 확장하였다.
->---
-> # 프로젝트 2 — n8n Webhook 기반 재고 부족 자동 감지 및 알림
+
+# 프로젝트 2 — n8n Webhook 기반 재고 부족 자동 감지 및 알림
 
 > n8n의 Webhook으로 품목별 재고 데이터를 수신하고, 현재재고가 안전재고 이하인지 자동 판정하여 Google Sheets에 기록한다. 재고가 부족한 경우에만 Gmail 알림을 발송하도록 구현하였다.
 
