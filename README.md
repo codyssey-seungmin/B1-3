@@ -237,3 +237,384 @@ images/
 
 > [!IMPORTANT]
 > **결론:** Zapier와 n8n 모두 이번 문의 분류 자동화를 정상 구현할 수 있었다. 두 도구의 사용 난이도는 전반적으로 비슷하게 느껴졌으며, 프로젝트 2에서는 n8n을 활용해 Webhook 기반 자동화로 범위를 확장하였다.
+>
+> # 프로젝트 2 — n8n Webhook 기반 재고 부족 자동 감지 및 알림
+
+> n8n의 Webhook으로 품목별 재고 데이터를 수신하고, 현재재고가 안전재고 이하인지 자동 판정하여 Google Sheets에 기록한다. 재고가 부족한 경우에만 Gmail 알림을 발송하도록 구현하였다.
+
+> [!NOTE]
+> **최종 구현 상태**
+> - Webhook Test URL 및 Production URL 수신 성공
+> - 재고 부족(True)·재고 정상(False) 분기 성공
+> - 두 결과 모두 Google Sheets 자동 기록 성공
+> - 재고 부족 시 Gmail 알림 발송 성공
+
+> [!TIP]
+> **과제 필수 요건 충족 요약**
+> - Trigger 1개: Webhook
+> - Action 2개 이상: Google Sheets 기록, Gmail 발송
+> - 조건 분기 1개: IF 노드
+> - 각 분기 실행: True와 False를 각각 1회 이상 실제 실행
+> - 자동 실행: Publish 후 Production URL 요청만으로 전체 워크플로우 자동 실행
+
+## 1. 프로젝트 주제 및 기획 의도
+
+### 1.1 프로젝트명
+
+**콘센트·플러그 재고 부족 자동 감지 및 알림 시스템**
+
+### 1.2 기획 배경
+
+전기 콘센트·플러그 판매 사업에서는 품목별 현재재고와 안전재고가 서로 다르다. 재고를 수동으로 확인하면 확인 누락이나 발주 지연이 생길 수 있으므로, 재고 데이터가 들어오는 즉시 부족 여부를 자동 판정하는 워크플로우를 설계하였다.
+
+### 1.3 목표
+
+- 외부에서 전달된 재고 데이터를 Webhook으로 수신한다.
+- 각 품목의 **현재재고 ≤ 안전재고** 여부를 자동 판단한다.
+- 재고 상태를 Google Sheets에 누적 기록한다.
+- 재고가 부족할 때만 Gmail로 담당자에게 알린다.
+- Publish 후 Production URL에서도 자동 실행되는지 확인한다.
+
+## 2. 도구 선정 및 역할
+
+| 도구 | 역할 | 선정 이유 |
+|:--|:--|:--|
+| n8n | 전체 워크플로우 구성 및 조건 분기 | Webhook Trigger, IF 분기, Google Sheets·Gmail 연동을 한 화면에서 구성하고 실행 데이터를 확인하기 쉽다. |
+| Webhook | 외부 재고 데이터 수신 | 외부 이벤트가 발생하는 즉시 자동화를 시작할 수 있다. |
+| Google Sheets | 재고 상태 이력 저장 | 결과 확인과 공유가 쉽고 별도 데이터베이스 없이 기록할 수 있다. |
+| Gmail | 재고 부족 알림 발송 | 부족 상황만 즉시 확인할 수 있다. |
+| PowerShell | Webhook 테스트 데이터 전송 | Windows 환경에서 별도 프로그램 없이 POST 요청을 재현할 수 있다. |
+
+n8n을 선택한 가장 큰 이유는 **Webhook을 Trigger로 직접 사용할 수 있고, IF의 True·False 분기와 각 노드의 실행 결과를 시각적으로 확인하기 쉽기 때문**이다. 이번 구현 범위에서는 별도 유료 Action이나 생성형 AI API도 필요하지 않았다.
+
+## 3. Webhook 개념과 전체 워크플로우
+
+Webhook은 Google Form 자체가 아니라 **외부 시스템이 데이터를 보내는 인터넷상의 수신 주소**이다. n8n의 Webhook URL로 데이터가 도착하면 이를 Trigger로 워크플로우가 시작된다.
+
+- **Trigger:** 자동화를 시작시키는 사건. 이 프로젝트에서는 Webhook에 재고 JSON 데이터가 도착하는 사건이다.
+- **Action:** Trigger 이후 수행되는 실제 작업. Google Sheets 행 추가와 Gmail 메시지 발송이 해당한다.
+- **조건 분기:** 입력값에 따라 실행 경로를 나누는 기능. IF 노드가 `현재재고 ≤ 안전재고`를 판단한다.
+
+```mermaid
+flowchart TD
+    A["외부 재고 시스템 또는 PowerShell"] --> B["Webhook<br/>재고 데이터 수신"]
+    B --> C{"현재재고 ≤ 안전재고?"}
+    C -->|True| D["Google Sheets<br/>재고 부족 기록"]
+    D --> E["Gmail<br/>재고 부족 알림"]
+    C -->|False| F["Google Sheets<br/>재고 정상 기록"]
+```
+
+> [!TIP]
+> 품목마다 안전재고가 달라도 IF 노드를 추가할 필요는 없다. Webhook 요청마다 `product_name`, `current_stock`, `safety_stock`을 함께 보내면 하나의 IF 노드가 각 입력값을 기준으로 판단한다.
+
+## 4. 사전 준비
+
+### 4.1 Google Sheets
+
+- 스프레드시트 이름: **콘센트·플러그 재고 관리**
+- 시트 탭 이름: **재고 기록**
+
+| 열 | 항목 |
+|:--:|:--|
+| A열 | 입력일시 |
+| B열 | 품목명 |
+| C열 | 현재재고 |
+| D열 | 안전재고 |
+| E열 | 처리상태 |
+
+### 4.2 Webhook 데이터 형식
+
+```json
+{
+  "product_name": "1구 콘센트&플러그 세트",
+  "current_stock": 8,
+  "safety_stock": 10
+}
+```
+
+- 재고 수량은 숫자형으로 보낸다.
+- 한글 깨짐을 방지하기 위해 PowerShell 요청에서는 UTF-8 바이트로 전송한다.
+
+## 5. n8n 구현 구조
+
+### 5.1 Webhook 노드
+
+- HTTP Method: `POST`
+- Path: `inventory-check`
+- 구축 중: Test URL 사용
+- 게시 후: Production URL 사용
+
+![Webhook Trigger 설정 및 데이터 수신](images/project2/P2-01-webhook-trigger.png)
+
+### 5.2 IF 조건 분기
+
+비교 자료형은 **Number**로 설정하였다.
+
+```text
+{{ $json.body.current_stock }}
+is less than or equal to
+{{ $json.body.safety_stock }}
+```
+
+- **True:** 현재재고가 안전재고 이하 → 재고 부족
+- **False:** 현재재고가 안전재고보다 많음 → 재고 정상
+
+![IF 조건과 True 분기 실행](images/project2/P2-02-if-condition.png)
+
+### 5.3 True 경로 — 재고 부족
+
+Google Sheets의 **Append row in sheet** 노드로 다음 값을 기록한다.
+
+- 입력일시: `{{ $now.setZone('Asia/Seoul').toFormat('yyyy-MM-dd HH:mm:ss') }}`
+- 품목명: `{{ $json.body.product_name }}`
+- 현재재고: `{{ $json.body.current_stock }}`
+- 안전재고: `{{ $json.body.safety_stock }}`
+- 처리상태: `재고 부족`
+
+이후 Gmail의 **Send a message** 노드를 연결한다.
+
+제목:
+
+```text
+재고 부족 알림 - {{ $json.body.product_name }}
+```
+
+본문:
+
+```text
+재고 부족이 확인되었습니다.
+품목명: {{ $json.body.product_name }}
+현재재고: {{ $json.body.current_stock }}개
+안전재고: {{ $json.body.safety_stock }}개
+현재재고가 안전재고 이하입니다. 재고 확인 및 발주가 필요합니다.
+```
+
+### 5.4 False 경로 — 재고 정상
+
+False 출력에도 Google Sheets의 **Append row in sheet** 노드를 연결하였다. 값 매핑은 True 경로와 같고 처리상태만 `재고 정상`으로 저장한다.
+
+정상 재고에는 Gmail을 연결하지 않았다. 정상 상태까지 매번 메일을 보내면 불필요한 알림이 많아져 중요한 부족 알림을 놓칠 수 있기 때문이다.
+
+### 5.5 최종 워크플로우
+
+![n8n 최종 워크플로우와 실행 결과](images/project2/P2-03-n8n-final-workflow.png)
+
+## 6. 실행 및 재현 방법
+
+이 프로젝트는 **Test URL을 이용한 개발 테스트**와 **Production URL을 이용한 실제 자동 실행 테스트**를 모두 재현할 수 있다.
+
+### 6.1 Test URL — 재고 부족 테스트
+
+1. n8n에서 Webhook 노드를 연다.
+2. **Test URL**을 복사한다.
+3. **Listen for test event**를 누른다.
+4. PowerShell을 열고 아래 명령의 URL만 자신의 Test URL로 교체한다.
+5. 명령을 실행한 뒤 n8n, Google Sheets, Gmail 결과를 확인한다.
+
+```powershell
+$body = @{
+  product_name = "1구 콘센트&플러그 세트"
+  current_stock = 8
+  safety_stock = 10
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "여기에_Test_URL_붙여넣기" `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+예상 결과: **8 ≤ 10 → True**
+
+Google Sheets에 `재고 부족`으로 기록되고 Gmail 알림이 발송된다.
+
+### 6.2 Test URL — 재고 정상 테스트
+
+Webhook에서 다시 **Listen for test event**를 누른 뒤 실행한다.
+
+```powershell
+$body = @{
+  product_name = "1구 콘센트 단품"
+  current_stock = 25
+  safety_stock = 20
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "여기에_Test_URL_붙여넣기" `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+예상 결과: **25 ≤ 20 → False**
+
+Google Sheets에 `재고 정상`으로 기록되고 Gmail은 발송되지 않는다.
+
+### 6.3 Production URL — 게시 후 자동 실행 테스트
+
+1. 워크플로우 오른쪽 위 **Publish**를 누른다.
+2. Webhook 노드에서 **Production URL**을 선택한다.
+3. `/webhook/inventory-check`로 끝나는 URL을 복사한다.
+4. Production URL에서는 **Listen for test event를 누르지 않는다.**
+5. 아래 PowerShell 명령의 URL을 Production URL로 교체해 실행한다.
+
+```powershell
+$body = @{
+  product_name = "1구 콘센트&플러그 세트"
+  current_stock = 7
+  safety_stock = 10
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "여기에_Production_URL_붙여넣기" `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+예상 결과: **7 ≤ 10 → True**
+
+Google Sheets 기록과 Gmail 발송이 자동으로 완료된다. 편집 화면에 실행선이 바로 나타나지 않으면 **Executions**에서 운영 실행 기록을 확인한다.
+
+> [!IMPORTANT]
+> **평가 시 가장 중요한 재현 방법:** 워크플로우가 Publish 상태인지 확인한 뒤 Production URL에 POST 요청을 보내면 별도 대기 버튼 없이 Webhook → IF → Google Sheets → 필요 시 Gmail까지 자동 실행된다.
+
+## 7. 테스트 결과
+
+| 구분 | 현재재고 | 안전재고 | IF 결과 | 시트 기록 | 메일 |
+|:--|--:|--:|:--:|:--:|:--:|
+| 부족 테스트 | 8 | 10 | True | 재고 부족 | 발송 |
+| 정상 테스트 | 25 | 20 | False | 재고 정상 | 미발송 |
+| Production 테스트 | 7 | 10 | True | 재고 부족 | 발송 |
+
+실제 Production 실행에서도 Google Sheets 기록과 Gmail 수신을 확인하였다. 이 결과를 통해 Test URL뿐 아니라 게시된 운영 구조에서도 Trigger 발생 시 전체 워크플로우가 자동 실행됨을 검증하였다.
+
+### 7.1 Google Sheets 기록 결과
+
+![Google Sheets 재고 부족 및 정상 기록](images/project2/P2-04-sheets-result.png)
+
+### 7.2 Gmail 알림 결과
+
+![Production 재고 부족 알림 메일](images/project2/P2-05-email-result.png)
+
+## 8. 문제 발생과 해결
+
+### 8.1 IF가 처음 False로 표시된 문제
+
+두 번째 비교값에 `safety_stock` 표현식이 완전히 들어가기 전에 실행했거나 이전 실행 결과가 화면에 남아 있으면 예상과 다른 결과가 표시될 수 있다.
+
+확인 순서:
+
+1. Webhook에서 데이터를 새로 수신한다.
+2. 첫 번째 값 미리보기가 현재재고인지 확인한다.
+3. 두 번째 값 미리보기가 안전재고인지 확인한다.
+4. 자료형이 Number인지 확인한다.
+5. 연산자가 `is less than or equal to`인지 확인한다.
+6. IF 노드를 다시 실행한다.
+
+### 8.2 한글이 깨지는 문제
+
+PowerShell 요청에서 JSON을 UTF-8 바이트로 변환하여 해결하였다.
+
+```powershell
+-ContentType "application/json; charset=utf-8"
+-Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+### 8.3 Test URL과 Production URL 차이
+
+| 구분 | URL 경로 | 실행 조건 |
+|:--|:--|:--|
+| Test URL | `/webhook-test/inventory-check` | 매번 **Listen for test event**를 먼저 눌러야 한다. |
+| Production URL | `/webhook/inventory-check` | 워크플로우를 Publish한 뒤 별도 대기 동작 없이 요청을 받는다. |
+
+## 9. 구현 결과 및 평가
+
+이번 프로젝트를 통해 Webhook이 단순한 입력 폼이 아니라 외부 이벤트를 받는 엔드포인트이며, 데이터가 도착하는 순간 n8n 워크플로우를 실행시키는 Trigger라는 점을 이해하였다.
+
+하나의 IF 노드가 요청마다 전달되는 현재재고와 안전재고를 비교하므로 품목 수가 늘어나더라도 품목별로 IF 노드를 새로 만들 필요가 없다. 또한 부족과 정상 상태는 모두 이력으로 남기되 부족할 때만 Gmail을 발송하도록 설계하여 기록의 완전성과 알림의 실용성을 함께 확보하였다.
+
+## 10. 한계와 향후 개선 방향
+
+현재 방식은 Webhook을 보낼 때 안전재고를 함께 전달한다. 실제 사업에 적용한다면 품목별 안전재고를 Google Sheets 또는 데이터베이스에 미리 저장하고 Webhook에는 품목명과 현재재고만 보내도록 개선할 수 있다.
+
+```mermaid
+flowchart TD
+    A["Webhook<br/>품목명·현재재고 수신"] --> B["품목 기준표<br/>안전재고 조회"]
+    B --> C{"현재재고와<br/>안전재고 비교"}
+    C --> D["상태 기록 및<br/>부족 알림"]
+```
+
+추가 개선안:
+
+- 품목 코드 기반 조회로 동명이품 오류 방지
+- 부족 수량과 권장 발주량 자동 계산
+- 같은 품목의 반복 알림을 일정 시간 제한
+- Gmail 외에 Slack 또는 Discord 알림 추가
+- 실제 주문·판매 시스템이 Webhook을 자동 전송하도록 연동
+
+## 11. 제출용 핵심 스크린샷
+
+본문에는 설정 과정을 모두 나열하지 않고, **Trigger 수신 → 조건 분기 → 최종 워크플로우 실행 → 결과 기록 → 알림 수신**을 증명하는 핵심 화면 5장만 사용한다. 중복되는 설정·테스트 화면은 제출하지 않고 원본만 개인 보관한다.
+
+| 파일명 | 확인할 내용 |
+|:--|:--|
+| `P2-01-webhook-trigger.png` | Webhook의 POST, `inventory-check` 설정과 테스트 데이터 수신 |
+| `P2-02-if-condition.png` | `현재재고 ≤ 안전재고` 조건과 `8 ≤ 10 → True` 분기 실행 |
+| `P2-03-n8n-final-workflow.png` | Executions의 `Succeeded` 상태와 전체 실행 경로 |
+| `P2-04-sheets-result.png` | `8 / 10 / 재고 부족`과 `25 / 20 / 재고 정상` 기록 |
+| `P2-05-email-result.png` | Production 테스트의 재고 부족 알림 메일 |
+
+### 11.1 이미지 편집 기준
+
+- **P2-01:** OUTPUT의 불필요한 headers 영역은 최대한 자르고, `POST`, `inventory-check`, body의 `product_name`, `current_stock`, `safety_stock`은 남긴다. Test URL 전체 주소와 IP 등 민감정보는 마스킹한다.
+- **P2-02:** 왼쪽의 불필요한 headers·IP 영역은 자르고, 입력값 `8 / 10`, IF 비교식, `True Branch`가 한 화면에서 읽히도록 남긴다.
+- **P2-03:** 성공한 실행의 `Succeeded` 상태와 전체 실행 경로가 보이도록 남기고, 과거 Error 기록은 최종 증빙과 관계가 없으므로 잘라낸다.
+- **P2-04:** A~E열과 부족·정상 결과가 있는 행 중심으로 자르고, 빈 열·빈 행은 최소화한다.
+- **P2-05:** 메일 제목과 본문은 유지하고 실제 Gmail 주소는 일부 마스킹한다.
+
+### 11.2 권장 GitHub 이미지 구조
+
+```text
+images/
+└── project2/
+    ├── P2-01-webhook-trigger.png
+    ├── P2-02-if-condition.png
+    ├── P2-03-n8n-final-workflow.png
+    ├── P2-04-sheets-result.png
+    └── P2-05-email-result.png
+```
+
+## 12. 과제 요구사항 대응
+
+- [x] 반복 업무 1개 정의 — 품목별 재고 확인, 상태 기록, 부족 알림
+- [x] 도구 1개 선정 및 선정 이유 작성 — n8n
+- [x] Trigger 1개 이상 — Webhook POST 요청
+- [x] Action 2개 이상 — Google Sheets 기록, Gmail 발송
+- [x] 조건 분기 1개 이상 — IF 노드
+- [x] True와 False 각각 1회 이상 실제 실행
+- [x] Trigger 발생 시 자동 실행 — Production URL 요청으로 검증
+- [x] 워크플로우 흐름 설명 및 다이어그램 포함
+- [x] 구현 화면과 실행 결과 증빙 확보
+- [x] 평가 시 재현 가능한 실행 방법 작성
+
+## 13. 과금 및 보안 검토
+
+### 13.1 과금
+
+이번 구성은 n8n, Google Sheets, Gmail, Windows PowerShell을 사용했으며 구현 과정에서 별도 유료 Action이나 생성형 AI API를 사용하지 않았다. 운영 환경에서 n8n 호스팅 비용이 발생하는 경우에는 자가호스팅 n8n을 무료 대안으로 고려할 수 있다.
+
+### 13.2 보안
+
+- Test URL과 Production URL 전체 주소는 공개하지 않는다.
+- n8n 서버 도메인과 IP는 가린다.
+- Gmail 계정 주소는 일부 마스킹한다.
+- API Key, 토큰, 비밀번호는 문서와 캡처에 포함하지 않는다.
+- 평가에 필요한 `/webhook-test/inventory-check`, `/webhook/inventory-check`, 노드명, 데이터 필드명은 남겨둔다.
+
+> [!CAUTION]
+> **제출 전 확인:** 핵심 스크린샷은 본문에 배치하고, 상세 설정 캡처는 개인 원본으로만 보관한다. 민감정보가 보이는 캡처는 반드시 마스킹한 뒤 제출한다.
+
+## 14. 결론
+
+Webhook 기반 입력, IF 조건 분기, Google Sheets 기록, Gmail 알림을 하나의 n8n 워크플로우로 구현하였다. 재고 부족과 정상 상태를 각각 실제 실행했고, Publish된 Production URL에서도 자동 실행되는 것을 확인하였다.
+
+따라서 이번 프로젝트는 **반복 업무 정의, 도구 선정 이유, Trigger, Action, 조건 분기, 양쪽 분기 실제 실행, 자동 실행 구조, 실행 결과 확인**이라는 과제의 핵심 요구사항을 모두 충족한다.
